@@ -1,0 +1,231 @@
+{
+    "name": "AI Meeting → Notes → Tasks Agent",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "zoom-meeting-ended",
+          "responseMode": "onReceived",
+          "responseData": "firstEntryJson"
+        },
+        "name": "Zoom Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [240, 300],
+        "webhookId": "zoom-meeting-ended"
+      },
+      {
+        "parameters": {
+          "url": "=https://api.zoom.us/v2/meetings/{{ $json.payload.object.uuid }}/recordings",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "oAuth2Api",
+          "options": {}
+        },
+        "name": "Get Zoom Transcript",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [460, 300],
+        "credentials": {
+          "oAuth2Api": {
+            "id": "zoom-oauth2",
+            "name": "Zoom OAuth2"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.recording_files.find(f => f.file_type === 'TRANSCRIPT').download_url }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "oAuth2Api",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "text"
+              }
+            }
+          }
+        },
+        "name": "Download Transcript Text",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [680, 300],
+        "credentials": {
+          "oAuth2Api": {
+            "id": "zoom-oauth2",
+            "name": "Zoom OAuth2"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "resource": "message",
+          "model": "claude-opus-4-5",
+          "messages": {
+            "values": [
+              {
+                "content": "=You are an expert meeting assistant. Given the following meeting transcript, produce two things:\n\n1. A concise meeting summary (3-5 bullet points covering key discussion points and decisions)\n2. A list of action items in JSON array format, each with: title, assignee (if mentioned), due_date (if mentioned, else null), priority (high/medium/low)\n\nFormat your response EXACTLY as:\n---SUMMARY---\n<bullet points here>\n\n---TASKS---\n<JSON array here>\n\nTranscript:\n{{ $json.data }}"
+              }
+            ]
+          },
+          "options": {
+            "maxTokensToSample": 2000
+          }
+        },
+        "name": "Claude AI - Summarize & Extract Tasks",
+        "type": "n8n-nodes-base.anthropic",
+        "typeVersion": 1,
+        "position": [900, 300],
+        "credentials": {
+          "anthropicApi": {
+            "id": "anthropic-api",
+            "name": "Anthropic API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const response = $input.first().json.content[0].text;\n\nconst summaryMatch = response.match(/---SUMMARY---\\n([\\s\\S]*?)\\n---TASKS---/);\nconst tasksMatch = response.match(/---TASKS---\\n([\\s\\S]*)/);\n\nconst summary = summaryMatch ? summaryMatch[1].trim() : 'No summary extracted.';\n\nlet tasks = [];\ntry {\n  const raw = tasksMatch ? tasksMatch[1].trim() : '[]';\n  tasks = JSON.parse(raw);\n} catch(e) {\n  tasks = [];\n}\n\nreturn [{ json: { summary, tasks } }];"
+        },
+        "name": "Parse AI Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1120, 300]
+      },
+      {
+        "parameters": {
+          "operation": "create",
+          "resource": "databasePage",
+          "databaseId": "YOUR_NOTION_DATABASE_ID",
+          "title": "={{ $json.title }}",
+          "propertiesUi": {
+            "propertyValues": [
+              {
+                "key": "Assignee",
+                "textValue": "={{ $json.assignee ?? 'Unassigned' }}"
+              },
+              {
+                "key": "Priority",
+                "selectValue": "={{ $json.priority }}"
+              },
+              {
+                "key": "Due Date",
+                "dateValue": "={{ $json.due_date }}"
+              }
+            ]
+          }
+        },
+        "name": "Create Notion Tasks",
+        "type": "n8n-nodes-base.notion",
+        "typeVersion": 2,
+        "position": [1340, 200],
+        "credentials": {
+          "notionApi": {
+            "id": "notion-api",
+            "name": "Notion API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "create",
+          "resource": "issue",
+          "summary": "={{ $json.title }}",
+          "projectKey": "YOUR_JIRA_PROJECT_KEY",
+          "issueType": "Task",
+          "additionalFields": {
+            "description": "={{ $json.assignee ? 'Assignee: ' + $json.assignee : '' }}",
+            "priority": {
+              "name": "={{ $json.priority === 'high' ? 'High' : $json.priority === 'medium' ? 'Medium' : 'Low' }}"
+            }
+          }
+        },
+        "name": "Create Jira Issues",
+        "type": "n8n-nodes-base.jira",
+        "typeVersion": 1,
+        "position": [1340, 400],
+        "credentials": {
+          "jiraApi": {
+            "id": "jira-api",
+            "name": "Jira API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "channel": "#YOUR_SLACK_CHANNEL",
+          "text": "=:zoom: *Meeting Summary*\n\n{{ $('Parse AI Response').first().json.summary }}\n\n:white_check_mark: *Tasks created:* {{ $('Parse AI Response').first().json.tasks.length }} action items added to Notion/Jira.",
+          "otherOptions": {
+            "mrkdwn": true
+          }
+        },
+        "name": "Send Summary to Slack",
+        "type": "n8n-nodes-base.slack",
+        "typeVersion": 2,
+        "position": [1560, 300],
+        "credentials": {
+          "slackApi": {
+            "id": "slack-api",
+            "name": "Slack API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "tasks",
+          "include": "noOtherFields"
+        },
+        "name": "Split Tasks",
+        "type": "n8n-nodes-base.splitOut",
+        "typeVersion": 1,
+        "position": [1230, 300]
+      }
+    ],
+    "connections": {
+      "Zoom Webhook": {
+        "main": [
+          [{ "node": "Get Zoom Transcript", "type": "main", "index": 0 }]
+        ]
+      },
+      "Get Zoom Transcript": {
+        "main": [
+          [{ "node": "Download Transcript Text", "type": "main", "index": 0 }]
+        ]
+      },
+      "Download Transcript Text": {
+        "main": [
+          [{ "node": "Claude AI - Summarize & Extract Tasks", "type": "main", "index": 0 }]
+        ]
+      },
+      "Claude AI - Summarize & Extract Tasks": {
+        "main": [
+          [{ "node": "Parse AI Response", "type": "main", "index": 0 }]
+        ]
+      },
+      "Parse AI Response": {
+        "main": [
+          [{ "node": "Split Tasks", "type": "main", "index": 0 }]
+        ]
+      },
+      "Split Tasks": {
+        "main": [
+          [
+            { "node": "Create Notion Tasks", "type": "main", "index": 0 },
+            { "node": "Create Jira Issues", "type": "main", "index": 0 }
+          ]
+        ]
+      },
+      "Create Notion Tasks": {
+        "main": [
+          [{ "node": "Send Summary to Slack", "type": "main", "index": 0 }]
+        ]
+      },
+      "Create Jira Issues": {
+        "main": [
+          [{ "node": "Send Summary to Slack", "type": "main", "index": 0 }]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    }
+  }
