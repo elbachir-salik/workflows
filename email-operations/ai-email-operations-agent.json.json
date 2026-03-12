@@ -1,0 +1,160 @@
+{
+    "name": "AI Email Operations Agent (Human Review)",
+    "nodes": [
+      {
+        "parameters": {},
+        "name": "Gmail Trigger",
+        "type": "n8n-nodes-base.gmailTrigger",
+        "typeVersion": 1,
+        "position": [200,300],
+        "credentials": {
+          "gmailOAuth2": {
+            "name": "Gmail Account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "chat",
+          "model": "gpt-4o-mini",
+          "messages": [
+            {
+              "role": "system",
+              "content": "Analyze the email and return JSON with: category (spam, task, support, general), priority (low, medium, high), summary, task, and draft_reply."
+            },
+            {
+              "role": "user",
+              "content": "Subject: {{$json[\"subject\"]}}\n\nEmail: {{$json[\"textPlain\"]}}"
+            }
+          ]
+        },
+        "name": "AI Email Classification",
+        "type": "n8n-nodes-base.openAi",
+        "typeVersion": 1,
+        "position": [450,300],
+        "credentials": {
+          "openAiApi": {
+            "name": "OpenAI API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "functionCode": "const data = JSON.parse(items[0].json.choices[0].message.content);\nreturn [{json:data}];"
+        },
+        "name": "Parse AI JSON",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [650,300]
+      },
+      {
+        "parameters": {
+          "propertyName": "category",
+          "rules": [
+            { "operation": "equal", "value": "spam" },
+            { "operation": "equal", "value": "task" },
+            { "operation": "equal", "value": "support" },
+            { "operation": "equal", "value": "general" }
+          ]
+        },
+        "name": "Route by Category",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 1,
+        "position": [850,300]
+      },
+      {
+        "parameters": {
+          "operation": "addLabel",
+          "labelIds": ["SPAM"]
+        },
+        "name": "Archive Spam",
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 1,
+        "position": [1100,120],
+        "credentials": {
+          "gmailOAuth2": {
+            "name": "Gmail Account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "resource": "page",
+          "operation": "create",
+          "databaseId": "YOUR_NOTION_DATABASE",
+          "propertiesUi": {
+            "propertyValues": [
+              {
+                "name": "Task",
+                "value": "={{$json[\"task\"]}}"
+              }
+            ]
+          }
+        },
+        "name": "Create Task",
+        "type": "n8n-nodes-base.notion",
+        "typeVersion": 2,
+        "position": [1100,260],
+        "credentials": {
+          "notionApi": {
+            "name": "Notion Account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "resource": "draft",
+          "operation": "create",
+          "to": "={{$json[\"from\"]}}",
+          "subject": "Re: {{$json[\"subject\"]}}",
+          "message": "={{$json[\"draft_reply\"]}}"
+        },
+        "name": "Create Gmail Draft",
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 1,
+        "position": [1100,400],
+        "credentials": {
+          "gmailOAuth2": {
+            "name": "Gmail Account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "channel": "#email-alerts",
+          "text": "New email processed\n\nCategory: {{$json[\"category\"]}}\nPriority: {{$json[\"priority\"]}}\n\nSummary:\n{{$json[\"summary\"]}}\n\nA draft reply has been created in Gmail."
+        },
+        "name": "Slack Alert",
+        "type": "n8n-nodes-base.slack",
+        "typeVersion": 1,
+        "position": [1100,540],
+        "credentials": {
+          "slackApi": {
+            "name": "Slack Account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Gmail Trigger": {
+        "main": [[{ "node": "AI Email Classification","type":"main","index":0 }]]
+      },
+      "AI Email Classification": {
+        "main": [[{ "node": "Parse AI JSON","type":"main","index":0 }]]
+      },
+      "Parse AI JSON": {
+        "main": [[{ "node": "Route by Category","type":"main","index":0 }]]
+      },
+      "Route by Category": {
+        "main": [
+          [{ "node": "Archive Spam","type":"main","index":0 }],
+          [{ "node": "Create Task","type":"main","index":0 }],
+          [{ "node": "Create Gmail Draft","type":"main","index":0 }],
+          [{ "node": "Create Gmail Draft","type":"main","index":0 }]
+        ]
+      },
+      "Create Gmail Draft": {
+        "main": [[{ "node": "Slack Alert","type":"main","index":0 }]]
+      }
+    }
+  }
