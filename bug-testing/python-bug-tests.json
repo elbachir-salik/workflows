@@ -1,0 +1,254 @@
+{
+    "name": "Python Bug Hunter + Test Writer",
+    "nodes": [
+      {
+        "parameters": {},
+        "id": "a1b2c3d4-0001-0001-0001-000000000001",
+        "name": "Manual Trigger",
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [240, 60]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $json.repo_url || 'https://api.github.com/repos/YOUR_ORG/YOUR_REPO/contents/' }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Accept",
+                "value": "application/vnd.github.v3+json"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "a1b2c3d4-0002-0002-0002-000000000002",
+        "name": "Fetch repo file list",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 200],
+        "notes": "Replace the URL with your GitHub repo path. Add a GitHub token in HTTP Header Auth credentials (header name: Authorization, value: token YOUR_TOKEN). For local files, replace this node with a Read Binary Files node pointing to your folder."
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "={{ $json }}",
+          "options": {}
+        },
+        "id": "a1b2c3d4-0003-0003-0003-000000000003",
+        "name": "Split files",
+        "type": "n8n-nodes-base.splitOut",
+        "typeVersion": 1,
+        "position": [240, 340]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "filter-py",
+                "leftValue": "={{ $json.name }}",
+                "rightValue": ".py",
+                "operator": {
+                  "type": "string",
+                  "operation": "endsWith"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "a1b2c3d4-0004-0004-0004-000000000004",
+        "name": "Filter .py files only",
+        "type": "n8n-nodes-base.filter",
+        "typeVersion": 2,
+        "position": [240, 480]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "={{ $json.download_url }}",
+          "options": {
+            "response": {
+              "response": {
+                "responseFormat": "text"
+              }
+            }
+          }
+        },
+        "id": "a1b2c3d4-0005-0005-0005-000000000005",
+        "name": "Download file content",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 620],
+        "notes": "Downloads the raw text of each .py file. The previous node passes download_url from the GitHub API. If using local files, skip this node — the content is already available."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-api-key",
+                "value": "YOUR_ANTHROPIC_API_KEY"
+              },
+              {
+                "name": "anthropic-version",
+                "value": "2023-06-01"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": []
+          },
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 2048,\n  \"system\": \"You are an expert Python code reviewer and senior software engineer. Your job is to analyse Python source files for bugs, logic errors, edge case failures, security issues, and code smells.\\n\\nFor every issue you find, output a JSON object in this exact format (one object per line, no surrounding array):\\n{\\\"file\\\": \\\"<filename>\\\", \\\"line\\\": <line_number_or_null>, \\\"severity\\\": \\\"critical|high|medium|low\\\", \\\"type\\\": \\\"<bug type>\\\", \\\"description\\\": \\\"<what is wrong>\\\", \\\"fix\\\": \\\"<how to fix it>\\\"}\\n\\nIf no bugs are found, output a single line: {\\\"file\\\": \\\"<filename>\\\", \\\"status\\\": \\\"clean\\\"}\\nOutput ONLY the JSON lines. No markdown, no prose, no explanation outside the JSON.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Filename: {{ $('Filter .py files only').item.json.name }}\\n\\nSource code:\\n```python\\n{{ $json.data }}\\n```\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "a1b2c3d4-0006-0006-0006-000000000006",
+        "name": "Claude — Bug scanner",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 760],
+        "notes": "Sends each Python file to Claude and gets back structured JSON bug reports. Replace YOUR_ANTHROPIC_API_KEY with your actual key, or better: create an n8n credential (HTTP Header Auth) named 'Anthropic' and reference it via the authentication field."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-api-key",
+                "value": "YOUR_ANTHROPIC_API_KEY"
+              },
+              {
+                "name": "anthropic-version",
+                "value": "2023-06-01"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 4096,\n  \"system\": \"You are a senior Python engineer specialising in test-driven development. Given a Python source file, write comprehensive pytest unit tests that cover:\\n1. All public functions and methods\\n2. Normal (happy-path) cases\\n3. Edge cases (empty input, None, zero, very large values)\\n4. Known bugs flagged in the bug report (write tests that would catch those bugs once fixed)\\n\\nRules:\\n- Use pytest only (no unittest)\\n- Use descriptive test names: test_<function>_<scenario>\\n- Add a brief docstring to each test explaining what it verifies\\n- Mock external dependencies (file I/O, network, DB) using pytest-mock\\n- Output ONLY valid Python code. No markdown fences, no prose.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Filename: {{ $('Filter .py files only').item.json.name }}\\n\\nSource code:\\n```python\\n{{ $('Download file content').item.json.data }}\\n```\\n\\nBug report from analysis:\\n{{ $('Claude — Bug scanner').item.json.content[0].text }}\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "a1b2c3d4-0007-0007-0007-000000000007",
+        "name": "Claude — Test writer",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 900],
+        "notes": "Takes the source file AND the bug report from the previous node, and writes a full pytest test file. The generated tests specifically cover the bugs found."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "out-filename",
+                "name": "filename",
+                "value": "={{ $('Filter .py files only').item.json.name.replace('.py', '') }}",
+                "type": "string"
+              },
+              {
+                "id": "out-bugs",
+                "name": "bug_report",
+                "value": "={{ $('Claude — Bug scanner').item.json.content[0].text }}",
+                "type": "string"
+              },
+              {
+                "id": "out-tests",
+                "name": "test_file_content",
+                "value": "={{ $json.content[0].text }}",
+                "type": "string"
+              },
+              {
+                "id": "out-test-filename",
+                "name": "test_filename",
+                "value": "=test_{{ $('Filter .py files only').item.json.name }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "a1b2c3d4-0008-0008-0008-000000000008",
+        "name": "Assemble output",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [240, 1040],
+        "notes": "Packages the bug report JSON and the generated test file content into clean fields. Connect this to whatever output you want: Slack message, GitHub PR, write to disk, send email, etc."
+      }
+    ],
+    "connections": {
+      "Manual Trigger": {
+        "main": [
+          [{ "node": "Fetch repo file list", "type": "main", "index": 0 }]
+        ]
+      },
+      "Fetch repo file list": {
+        "main": [
+          [{ "node": "Split files", "type": "main", "index": 0 }]
+        ]
+      },
+      "Split files": {
+        "main": [
+          [{ "node": "Filter .py files only", "type": "main", "index": 0 }]
+        ]
+      },
+      "Filter .py files only": {
+        "main": [
+          [{ "node": "Download file content", "type": "main", "index": 0 }]
+        ]
+      },
+      "Download file content": {
+        "main": [
+          [{ "node": "Claude — Bug scanner", "type": "main", "index": 0 }]
+        ]
+      },
+      "Claude — Bug scanner": {
+        "main": [
+          [{ "node": "Claude — Test writer", "type": "main", "index": 0 }]
+        ]
+      },
+      "Claude — Test writer": {
+        "main": [
+          [{ "node": "Assemble output", "type": "main", "index": 0 }]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": ["ai-agent", "code-quality", "python", "testing"],
+    "triggerCount": 0,
+    "updatedAt": "2026-03-14T00:00:00.000Z",
+    "versionId": "1"
+  }
