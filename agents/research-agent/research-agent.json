@@ -1,0 +1,328 @@
+{
+    "name": "Deep Research Agent — Telegram → Google Docs",
+    "nodes": [
+      {
+        "parameters": {
+          "updates": ["message"],
+          "additionalFields": {}
+        },
+        "id": "node-001",
+        "name": "Telegram Trigger",
+        "type": "n8n-nodes-base.telegramTrigger",
+        "typeVersion": 1.1,
+        "position": [240, 60],
+        "webhookId": "research-agent-telegram",
+        "notes": "SETUP: Create a Telegram bot via @BotFather → get the token → add it as a Telegram credential in n8n. Then send any message to your bot to trigger the agent."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "extract-topic",
+                "name": "topic",
+                "value": "={{ $json.message.text }}",
+                "type": "string"
+              },
+              {
+                "id": "extract-chat-id",
+                "name": "chat_id",
+                "value": "={{ $json.message.chat.id }}",
+                "type": "string"
+              },
+              {
+                "id": "extract-timestamp",
+                "name": "timestamp",
+                "value": "={{ new Date().toISOString() }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-002",
+        "name": "Extract topic and chat ID",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [240, 200]
+      },
+      {
+        "parameters": {
+          "chatId": "={{ $json.chat_id }}",
+          "text": "={{ '🔍 Starting research on: *' + $json.topic + '*\\n\\nThis takes 60–90 seconds. I\\'ll send you the Google Docs link when done.' }}",
+          "additionalFields": {
+            "parse_mode": "Markdown"
+          }
+        },
+        "id": "node-003",
+        "name": "Telegram — Acknowledge",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [240, 340],
+        "notes": "Sends an immediate reply so the user knows the agent is running."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+              { "name": "anthropic-version", "value": "2023-06-01" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are a research strategist. Given a research topic, generate exactly 5 highly specific Google search queries that together will give comprehensive coverage of the topic. Cover different angles: overview, recent news, expert opinions, data/statistics, and criticism or challenges.\\n\\nRespond ONLY with a JSON array of 5 strings. No explanation, no markdown, no prose. Example output:\\n[\\\"query one\\\", \\\"query two\\\", \\\"query three\\\", \\\"query four\\\", \\\"query five\\\"]\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Research topic: {{ $('Extract topic and chat ID').item.json.topic }}\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "node-004",
+        "name": "Claude — Generate search queries",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 480],
+        "notes": "Agent step 1: Claude breaks the topic into 5 targeted search queries covering different angles."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "parse-queries",
+                "name": "queries",
+                "value": "={{ JSON.parse($json.content[0].text) }}",
+                "type": "array"
+              },
+              {
+                "id": "pass-topic",
+                "name": "topic",
+                "value": "={{ $('Extract topic and chat ID').item.json.topic }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-chat-id",
+                "name": "chat_id",
+                "value": "={{ $('Extract topic and chat ID').item.json.chat_id }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-005",
+        "name": "Parse queries array",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [240, 620]
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "queries",
+          "options": {}
+        },
+        "id": "node-006",
+        "name": "Split into individual queries",
+        "type": "n8n-nodes-base.splitOut",
+        "typeVersion": 1,
+        "position": [240, 760],
+        "notes": "Creates one item per search query so they can run in parallel."
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "https://serpapi.com/search",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              { "name": "q", "value": "={{ $json.queries }}" },
+              { "name": "api_key", "value": "YOUR_SERPAPI_KEY" },
+              { "name": "num", "value": "5" },
+              { "name": "engine", "value": "google" }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-007",
+        "name": "SerpAPI — Web search",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 900],
+        "notes": "SETUP: Sign up at serpapi.com — 100 free searches/month is enough for testing. Replace YOUR_SERPAPI_KEY. Alternative: use Brave Search API (also free tier, replace URL with https://api.search.brave.com/res/v1/web/search and add header 'X-Subscription-Token')."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "extract-results",
+                "name": "search_results",
+                "value": "={{ $json.organic_results ? $json.organic_results.slice(0,3).map(r => ({ title: r.title, url: r.link, snippet: r.snippet })) : [] }}",
+                "type": "array"
+              },
+              {
+                "id": "pass-topic-2",
+                "name": "topic",
+                "value": "={{ $('Extract topic and chat ID').item.json.topic }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-008",
+        "name": "Extract top 3 results per query",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [240, 1040]
+      },
+      {
+        "parameters": {
+          "aggregate": "aggregateAllItemData",
+          "options": {}
+        },
+        "id": "node-009",
+        "name": "Merge all search results",
+        "type": "n8n-nodes-base.aggregate",
+        "typeVersion": 1,
+        "position": [240, 1180],
+        "notes": "Combines results from all 5 searches into a single item for Claude to analyse."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+              { "name": "anthropic-version", "value": "2023-06-01" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 4096,\n  \"system\": \"You are an expert research analyst. You write comprehensive, well-structured research reports that are used by executives and decision-makers. Your reports are factual, balanced, and cite sources throughout.\\n\\nWrite in clear professional English. Use the source URLs provided — cite them inline as [Source: URL]. Never invent facts or URLs.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a comprehensive research report on the following topic:\\n\\nTOPIC: {{ $('Extract topic and chat ID').item.json.topic }}\\n\\nSOURCE MATERIAL (search results collected from the web):\\n{{ JSON.stringify($json.data) }}\\n\\nWrite the report with these exact sections, using these exact headings:\\n\\n# Research Report: {{ $('Extract topic and chat ID').item.json.topic }}\\n\\n## Executive Summary\\n[3-4 sentences capturing the most important insight. What does someone need to know if they only read this section?]\\n\\n## Key Findings\\n[5-7 bullet points. Each finding must cite its source inline as (Source: URL). Be specific — include numbers, names, dates where available.]\\n\\n## Pros & Cons\\n### Advantages\\n[3-5 bullet points]\\n### Challenges & Risks\\n[3-5 bullet points]\\n\\n## Competitor & People Landscape\\n[Who are the key players, companies, or people in this space? What are they doing? 3-5 entries with sources.]\\n\\n## Action Recommendations\\n[3-5 concrete, specific actions someone could take based on this research. Be direct.]\\n\\n## Sources\\n[List all URLs cited in the report as a numbered list]\\n\\n---\\nReport generated: {{ new Date().toLocaleDateString('en-GB', {day:'numeric', month:'long', year:'numeric'}) }}\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "node-010",
+        "name": "Claude — Write research report",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [240, 1320],
+        "notes": "Agent step 2: Claude synthesises all search results into a structured 5-section report with citations."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "extract-report",
+                "name": "report_markdown",
+                "value": "={{ $json.content[0].text }}",
+                "type": "string"
+              },
+              {
+                "id": "extract-title",
+                "name": "doc_title",
+                "value": "={{ 'Research: ' + $('Extract topic and chat ID').item.json.topic + ' — ' + new Date().toLocaleDateString('en-GB') }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-chat-final",
+                "name": "chat_id",
+                "value": "={{ $('Extract topic and chat ID').item.json.chat_id }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-011",
+        "name": "Prepare report for Docs",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [240, 1460]
+      },
+      {
+        "parameters": {
+          "operation": "create",
+          "title": "={{ $json.doc_title }}",
+          "content": "={{ $json.report_markdown }}",
+          "additionalFields": {}
+        },
+        "id": "node-012",
+        "name": "Google Docs — Create report",
+        "type": "n8n-nodes-base.googleDocs",
+        "typeVersion": 2,
+        "position": [240, 1600],
+        "notes": "SETUP: Add Google Docs OAuth2 credentials in n8n. Go to Credentials → New → Google Docs OAuth2. You'll need to create a Google Cloud project and enable the Google Docs API — n8n's docs walk through this at docs.n8n.io/integrations/builtin/credentials/google/"
+      },
+      {
+        "parameters": {
+          "chatId": "={{ $('Prepare report for Docs').item.json.chat_id }}",
+          "text": "={{ '✅ *Research complete!*\\n\\n📄 *' + $('Prepare report for Docs').item.json.doc_title + '*\\n\\n🔗 [Open in Google Docs](https://docs.google.com/document/d/' + $json.id + '/edit)\\n\\nSections included:\\n• Executive summary\\n• Key findings with sources\\n• Pros & cons\\n• Competitor landscape\\n• Action recommendations' }}",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": true
+          }
+        },
+        "id": "node-013",
+        "name": "Telegram — Send doc link",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [240, 1740],
+        "notes": "Sends the Google Docs link back to the user in Telegram with a summary of what's inside."
+      }
+    ],
+    "connections": {
+      "Telegram Trigger": {
+        "main": [[{ "node": "Extract topic and chat ID", "type": "main", "index": 0 }]]
+      },
+      "Extract topic and chat ID": {
+        "main": [[{ "node": "Telegram — Acknowledge", "type": "main", "index": 0 }]]
+      },
+      "Telegram — Acknowledge": {
+        "main": [[{ "node": "Claude — Generate search queries", "type": "main", "index": 0 }]]
+      },
+      "Claude — Generate search queries": {
+        "main": [[{ "node": "Parse queries array", "type": "main", "index": 0 }]]
+      },
+      "Parse queries array": {
+        "main": [[{ "node": "Split into individual queries", "type": "main", "index": 0 }]]
+      },
+      "Split into individual queries": {
+        "main": [[{ "node": "SerpAPI — Web search", "type": "main", "index": 0 }]]
+      },
+      "SerpAPI — Web search": {
+        "main": [[{ "node": "Extract top 3 results per query", "type": "main", "index": 0 }]]
+      },
+      "Extract top 3 results per query": {
+        "main": [[{ "node": "Merge all search results", "type": "main", "index": 0 }]]
+      },
+      "Merge all search results": {
+        "main": [[{ "node": "Claude — Write research report", "type": "main", "index": 0 }]]
+      },
+      "Claude — Write research report": {
+        "main": [[{ "node": "Prepare report for Docs", "type": "main", "index": 0 }]]
+      },
+      "Prepare report for Docs": {
+        "main": [[{ "node": "Google Docs — Create report", "type": "main", "index": 0 }]]
+      },
+      "Google Docs — Create report": {
+        "main": [[{ "node": "Telegram — Send doc link", "type": "main", "index": 0 }]]
+      }
+    },
+    "pinData": {},
+    "settings": { "executionOrder": "v1" },
+    "staticData": null,
+    "tags": ["ai-agent", "research", "claude", "telegram", "google-docs"],
+    "triggerCount": 0,
+    "updatedAt": "2026-03-14T00:00:00.000Z",
+    "versionId": "1"
+  }
