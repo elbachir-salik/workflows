@@ -1,0 +1,600 @@
+{
+    "name": "Deal Flow HITL Agent — B2B Partnerships",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "deal-flow-typeform",
+          "options": {}
+        },
+        "id": "node-001",
+        "name": "Typeform Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [80, 60],
+        "webhookId": "deal-flow-typeform",
+        "notes": "SETUP: In Typeform → Connect → Webhooks → paste this webhook URL. Your form should collect: name, company, email, message/use case."
+      },
+      {
+        "parameters": {
+          "pollTimes": {
+            "item": [{ "mode": "everyMinute" }]
+          },
+          "filters": {
+            "readStatus": "unread",
+            "sender": ""
+          },
+          "options": {}
+        },
+        "id": "node-002",
+        "name": "Gmail — Watch inbound",
+        "type": "n8n-nodes-base.gmailTrigger",
+        "typeVersion": 1,
+        "position": [280, 60],
+        "notes": "SETUP: Add Gmail OAuth2 credential. Polls every minute for unread emails. Add a filter like 'label:partnerships' to avoid noise — create that Gmail label and tag relevant emails manually at first."
+      },
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "deal-flow-linkedin",
+          "options": {}
+        },
+        "id": "node-003",
+        "name": "LinkedIn Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [480, 60],
+        "webhookId": "deal-flow-linkedin",
+        "notes": "LinkedIn has no native webhook. WORKAROUND: Use Phantombuster or Zapier to forward new LinkedIn messages to this webhook URL as JSON with fields: sender_name, sender_company, message_text, sender_profile_url. Phantombuster has a free tier."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "norm-name",
+                "name": "contact_name",
+                "value": "={{ $json.form_response?.answers?.find(a => a.field?.ref === 'name')?.text || $json.payload?.from?.emailAddress?.name || $json.sender_name || 'Unknown' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-company",
+                "name": "company",
+                "value": "={{ $json.form_response?.answers?.find(a => a.field?.ref === 'company')?.text || $json.payload?.from?.emailAddress?.address?.split('@')[1]?.split('.')[0] || $json.sender_company || 'Unknown' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-email",
+                "name": "email",
+                "value": "={{ $json.form_response?.answers?.find(a => a.field?.ref === 'email')?.email || $json.payload?.from?.emailAddress?.address || $json.sender_email || '' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-message",
+                "name": "message",
+                "value": "={{ $json.form_response?.answers?.find(a => a.field?.ref === 'message')?.text || $json.snippet || $json.message_text || '' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-source",
+                "name": "source",
+                "value": "={{ $json.form_response ? 'Typeform' : $json.payload?.from ? 'Gmail' : 'LinkedIn' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-profile",
+                "name": "profile_url",
+                "value": "={{ $json.sender_profile_url || '' }}",
+                "type": "string"
+              },
+              {
+                "id": "norm-timestamp",
+                "name": "received_at",
+                "value": "={{ new Date().toISOString() }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-004",
+        "name": "Normalize all sources",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [280, 220],
+        "notes": "Regardless of source (Typeform / Gmail / LinkedIn), this node produces a consistent structure with the same field names. All downstream nodes reference these normalized fields."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+              { "name": "anthropic-version", "value": "2023-06-01" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are a B2B partnership deal qualifier for a founder who runs an open source AI automation library. Your job is to evaluate inbound partnership and collaboration inquiries and determine if they are worth pursuing.\\n\\nIdeal partners: companies or individuals who work in automation, AI, no-code, developer tools, SaaS, or content creation. They should have a clear use case, a real company or presence, and a genuine reason to partner.\\n\\nNot a fit: vague requests, one-liners with no context, spam, job seekers, or people looking for free work.\\n\\nRespond ONLY with a JSON object in this exact format — no prose, no markdown:\\n{\\n  \\\"score\\\": <integer 1-10>,\\n  \\\"fit_reason\\\": \\\"<one sentence: why this is or is not a good fit>\\\",\\n  \\\"company_guess\\\": \\\"<best guess at company name or niche>\\\",\\n  \\\"intent\\\": \\\"<partnership | integration | sponsorship | collaboration | unclear>\\\",\\n  \\\"urgency\\\": \\\"<high | medium | low>\\\",\\n  \\\"red_flags\\\": \\\"<any concerns, or 'none'>\\\",\\n  \\\"suggested_action\\\": \\\"<add_to_crm | research_more | ignore>\\\"\n}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Evaluate this inbound inquiry:\\n\\nSource: {{ $json.source }}\\nFrom: {{ $json.contact_name }}\\nCompany: {{ $json.company }}\\nEmail: {{ $json.email }}\\nMessage: {{ $json.message }}\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "node-005",
+        "name": "Claude — Qualify the deal",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [280, 360],
+        "notes": "Agent step 1: Claude reads the inbound message and scores it 1-10 with structured reasoning. Fast and cheap — uses ~200 tokens."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "parse-qual",
+                "name": "qualification",
+                "value": "={{ JSON.parse($json.content[0].text) }}",
+                "type": "object"
+              },
+              {
+                "id": "pass-contact",
+                "name": "contact_name",
+                "value": "={{ $('Normalize all sources').item.json.contact_name }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-company",
+                "name": "company",
+                "value": "={{ $('Normalize all sources').item.json.company }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-email",
+                "name": "email",
+                "value": "={{ $('Normalize all sources').item.json.email }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-message",
+                "name": "message",
+                "value": "={{ $('Normalize all sources').item.json.message }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-source",
+                "name": "source",
+                "value": "={{ $('Normalize all sources').item.json.source }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-profile",
+                "name": "profile_url",
+                "value": "={{ $('Normalize all sources').item.json.profile_url }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-ts",
+                "name": "received_at",
+                "value": "={{ $('Normalize all sources').item.json.received_at }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-006",
+        "name": "Parse qualification result",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [280, 500]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+            "conditions": [
+              {
+                "id": "score-filter",
+                "leftValue": "={{ $json.qualification.score }}",
+                "rightValue": 5,
+                "operator": { "type": "number", "operation": "gte" }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "node-007",
+        "name": "Score ≥ 5?",
+        "type": "n8n-nodes-base.filter",
+        "typeVersion": 2,
+        "position": [280, 640],
+        "notes": "Low-score leads (< 5) are silently dropped here. Only qualified leads continue to the research + approval flow. Adjust the threshold to suit your standards."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+              { "name": "anthropic-version", "value": "2023-06-01" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 2048,\n  \"system\": \"You are a B2B research analyst. Given a company name and a person's name, write a concise but thorough intelligence brief that helps a founder decide whether to pursue a partnership. Be factual — if you don't know something, say so rather than invent it. Focus on what actually matters for a B2B partnership decision.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a partnership intelligence brief for this inbound lead.\\n\\nPerson: {{ $json.contact_name }}\\nCompany: {{ $json.company }}\\nTheir message: {{ $json.message }}\\nInitial qualification: {{ JSON.stringify($json.qualification) }}\\n\\nCover these points concisely:\\n1. What does this company do and how big are they?\\n2. Why might they want to partner with an AI automation library?\\n3. What's in it for us — audience size, distribution, technical integration, or revenue potential?\\n4. Any red flags or reasons to be cautious?\\n5. Recommended next step if we proceed\\n\\nKeep it under 300 words. Use plain text, no markdown headers.\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "node-008",
+        "name": "Claude — Deep research brief",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [280, 800],
+        "notes": "Agent step 2: Only runs for leads that passed the score filter. Produces a 200-300 word intelligence brief to help you make a fast decision."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "store-brief",
+                "name": "research_brief",
+                "value": "={{ $json.content[0].text }}",
+                "type": "string"
+              },
+              {
+                "id": "build-telegram-msg",
+                "name": "telegram_message",
+                "value": "={{ '🎯 *New B2B Opportunity*\\n\\n' + '👤 *' + $('Parse qualification result').item.json.contact_name + '* — ' + $('Parse qualification result').item.json.company + '\\n' + '📥 Source: ' + $('Parse qualification result').item.json.source + '\\n' + '⭐ Score: *' + $('Parse qualification result').item.json.qualification.score + '/10*\\n' + '🎯 Intent: ' + $('Parse qualification result').item.json.qualification.intent + '\\n' + '⚡ Urgency: ' + $('Parse qualification result').item.json.qualification.urgency + '\\n\\n' + '💬 *Their message:*\\n_' + $('Parse qualification result').item.json.message.substring(0,300) + ($('Parse qualification result').item.json.message.length > 300 ? '...' : '') + '_\\n\\n' + '🔍 *Research brief:*\\n' + $json.content[0].text.substring(0,600) + ($json.content[0].text.length > 600 ? '...' : '') + '\\n\\n' + '─────────────────\\nWhat do you want to do?' }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-all-data",
+                "name": "contact_name",
+                "value": "={{ $('Parse qualification result').item.json.contact_name }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-company-2",
+                "name": "company",
+                "value": "={{ $('Parse qualification result').item.json.company }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-email-2",
+                "name": "email",
+                "value": "={{ $('Parse qualification result').item.json.email }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-source-2",
+                "name": "source",
+                "value": "={{ $('Parse qualification result').item.json.source }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-score",
+                "name": "score",
+                "value": "={{ $('Parse qualification result').item.json.qualification.score }}",
+                "type": "number"
+              },
+              {
+                "id": "pass-intent",
+                "name": "intent",
+                "value": "={{ $('Parse qualification result').item.json.qualification.intent }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-fit",
+                "name": "fit_reason",
+                "value": "={{ $('Parse qualification result').item.json.qualification.fit_reason }}",
+                "type": "string"
+              },
+              {
+                "id": "pass-ts-2",
+                "name": "received_at",
+                "value": "={{ $('Parse qualification result').item.json.received_at }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-009",
+        "name": "Build Telegram brief",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [280, 960]
+      },
+      {
+        "parameters": {
+          "chatId": "YOUR_TELEGRAM_CHAT_ID",
+          "text": "={{ $json.telegram_message }}",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "reply_markup": {
+              "inline_keyboard": [
+                [
+                  { "text": "✅ Add to CRM", "callback_data": "add_crm" },
+                  { "text": "🔬 Research more", "callback_data": "research_more" },
+                  { "text": "❌ Ignore", "callback_data": "ignore" }
+                ]
+              ]
+            }
+          }
+        },
+        "id": "node-010",
+        "name": "Telegram — Send for approval",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [280, 1120],
+        "notes": "SETUP: Replace YOUR_TELEGRAM_CHAT_ID with your personal chat ID. Get it by messaging @userinfobot on Telegram. This sends the deal brief with 3 inline buttons — the workflow pauses here and waits for your tap."
+      },
+      {
+        "parameters": {
+          "updates": ["callback_query"],
+          "additionalFields": {}
+        },
+        "id": "node-011",
+        "name": "Telegram — Wait for button tap",
+        "type": "n8n-nodes-base.telegramTrigger",
+        "typeVersion": 1.1,
+        "position": [280, 1280],
+        "notes": "This trigger fires when you tap one of the inline buttons. It receives callback_data: 'add_crm', 'research_more', or 'ignore'. The workflow resumes from here."
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "extract-action",
+                "name": "chosen_action",
+                "value": "={{ $json.callback_query.data }}",
+                "type": "string"
+              },
+              {
+                "id": "extract-msg-id",
+                "name": "message_id",
+                "value": "={{ $json.callback_query.message.message_id }}",
+                "type": "string"
+              },
+              {
+                "id": "extract-chat-id",
+                "name": "chat_id",
+                "value": "={{ $json.callback_query.message.chat.id }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-012",
+        "name": "Extract chosen action",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [280, 1420]
+      },
+      {
+        "parameters": {
+          "rules": {
+            "values": [
+              {
+                "conditions": {
+                  "options": { "caseSensitive": false },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.chosen_action }}",
+                      "rightValue": "add_crm",
+                      "operator": { "type": "string", "operation": "equals" }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "add_crm"
+              },
+              {
+                "conditions": {
+                  "options": { "caseSensitive": false },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.chosen_action }}",
+                      "rightValue": "research_more",
+                      "operator": { "type": "string", "operation": "equals" }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "research_more"
+              },
+              {
+                "conditions": {
+                  "options": { "caseSensitive": false },
+                  "conditions": [
+                    {
+                      "leftValue": "={{ $json.chosen_action }}",
+                      "rightValue": "ignore",
+                      "operator": { "type": "string", "operation": "equals" }
+                    }
+                  ]
+                },
+                "renameOutput": true,
+                "outputKey": "ignore"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "node-013",
+        "name": "Route by decision",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 3,
+        "position": [280, 1560],
+        "notes": "Splits flow into 3 branches based on which button you tapped."
+      },
+      {
+        "parameters": {
+          "operation": "create",
+          "databaseId": {
+            "__rl": true,
+            "value": "YOUR_NOTION_DATABASE_ID",
+            "mode": "id"
+          },
+          "title": "={{ $('Build Telegram brief').item.json.contact_name + ' — ' + $('Build Telegram brief').item.json.company }}",
+          "propertiesUi": {
+            "propertyValues": [
+              { "key": "Company", "type": "rich_text", "textValue": "={{ $('Build Telegram brief').item.json.company }}" },
+              { "key": "Email", "type": "email", "emailValue": "={{ $('Build Telegram brief').item.json.email }}" },
+              { "key": "Source", "type": "select", "selectValue": "={{ $('Build Telegram brief').item.json.source }}" },
+              { "key": "Score", "type": "number", "numberValue": "={{ $('Build Telegram brief').item.json.score }}" },
+              { "key": "Intent", "type": "select", "selectValue": "={{ $('Build Telegram brief').item.json.intent }}" },
+              { "key": "Status", "type": "select", "selectValue": "New" },
+              { "key": "Fit Reason", "type": "rich_text", "textValue": "={{ $('Build Telegram brief').item.json.fit_reason }}" },
+              { "key": "Research Brief", "type": "rich_text", "textValue": "={{ $('Build Telegram brief').item.json.research_brief }}" },
+              { "key": "Received At", "type": "date", "dateValue": "={{ $('Build Telegram brief').item.json.received_at }}" }
+            ]
+          }
+        },
+        "id": "node-014",
+        "name": "Notion — Add to CRM",
+        "type": "n8n-nodes-base.notion",
+        "typeVersion": 2.2,
+        "position": [80, 1720],
+        "notes": "SETUP: Create a Notion database with these properties: Company (text), Email (email), Source (select), Score (number), Intent (select), Status (select: New/In Progress/Closed), Fit Reason (text), Research Brief (text), Received At (date). Add Notion API credential in n8n and paste your database ID."
+      },
+      {
+        "parameters": {
+          "chatId": "={{ $('Extract chosen action').item.json.chat_id }}",
+          "text": "={{ '✅ *Added to CRM*\\n\\n' + $('Build Telegram brief').item.json.contact_name + ' from ' + $('Build Telegram brief').item.json.company + ' has been saved to your Notion deal pipeline with status: *New*\\n\\nScore: ' + $('Build Telegram brief').item.json.score + '/10' }}",
+          "additionalFields": { "parse_mode": "Markdown" }
+        },
+        "id": "node-015",
+        "name": "Telegram — Confirm CRM saved",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [80, 1880]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.anthropic.com/v1/messages",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+              { "name": "anthropic-version", "value": "2023-06-01" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 3000,\n  \"system\": \"You are a senior B2B partnership analyst. Conduct a thorough deep-dive research on a company to help a founder decide whether to pursue a partnership. Be specific and substantive. If you don't have data, say so — never invent facts.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Conduct a deep research report on this potential B2B partner. I already reviewed them and want more detail before deciding.\\n\\nCompany: {{ $('Build Telegram brief').item.json.company }}\\nContact: {{ $('Build Telegram brief').item.json.contact_name }}\\nInitial brief: {{ $('Build Telegram brief').item.json.research_brief }}\\nOriginal message: {{ $('Build Telegram brief').item.json.telegram_message }}\\n\\nProvide a thorough report covering:\\n1. Company background — founding, size, funding stage, revenue estimate\\n2. Product/service — what exactly they do, their tech stack if relevant\\n3. Their audience & distribution — how many users/customers, social following, community size\\n4. Partnership potential — specific ways we could work together, what they get, what we get\\n5. Competitive context — who else they partner with, any conflicts with our repo\\n6. Decision: should we pursue this? Score 1-10 with clear reasoning.\\n\\nBe direct and specific. Maximum 500 words.\"\n    }\n  ]\n}",
+          "options": {}
+        },
+        "id": "node-016",
+        "name": "Claude — Extended research",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [480, 1720],
+        "notes": "Triggered when you tap 'Research more'. Runs a much deeper analysis — company background, funding, audience, partnership fit scoring."
+      },
+      {
+        "parameters": {
+          "chatId": "={{ $('Extract chosen action').item.json.chat_id }}",
+          "text": "={{ '🔬 *Deep Research Report*\\n\\n*' + $('Build Telegram brief').item.json.contact_name + ' — ' + $('Build Telegram brief').item.json.company + '*\\n\\n' + $json.content[0].text + '\\n\\n─────────────────\\nAdd this to CRM?' }}",
+          "additionalFields": {
+            "parse_mode": "Markdown",
+            "reply_markup": {
+              "inline_keyboard": [
+                [
+                  { "text": "✅ Yes, add to CRM", "callback_data": "add_crm" },
+                  { "text": "❌ No, ignore", "callback_data": "ignore" }
+                ]
+              ]
+            }
+          }
+        },
+        "id": "node-017",
+        "name": "Telegram — Send deep research",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [480, 1880],
+        "notes": "Sends the extended research back to Telegram with a second approval — Add to CRM or Ignore. This creates the second approval loop."
+      },
+      {
+        "parameters": {
+          "chatId": "={{ $('Extract chosen action').item.json.chat_id }}",
+          "text": "={{ '🗑️ Ignored\\n\\n' + $('Build Telegram brief').item.json.contact_name + ' from ' + $('Build Telegram brief').item.json.company + ' has been archived.' }}",
+          "additionalFields": {}
+        },
+        "id": "node-018",
+        "name": "Telegram — Confirm ignored",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1.2,
+        "position": [280, 1720]
+      }
+    ],
+    "connections": {
+      "Typeform Webhook": {
+        "main": [[{ "node": "Normalize all sources", "type": "main", "index": 0 }]]
+      },
+      "Gmail — Watch inbound": {
+        "main": [[{ "node": "Normalize all sources", "type": "main", "index": 0 }]]
+      },
+      "LinkedIn Webhook": {
+        "main": [[{ "node": "Normalize all sources", "type": "main", "index": 0 }]]
+      },
+      "Normalize all sources": {
+        "main": [[{ "node": "Claude — Qualify the deal", "type": "main", "index": 0 }]]
+      },
+      "Claude — Qualify the deal": {
+        "main": [[{ "node": "Parse qualification result", "type": "main", "index": 0 }]]
+      },
+      "Parse qualification result": {
+        "main": [[{ "node": "Score ≥ 5?", "type": "main", "index": 0 }]]
+      },
+      "Score ≥ 5?": {
+        "main": [[{ "node": "Claude — Deep research brief", "type": "main", "index": 0 }]]
+      },
+      "Claude — Deep research brief": {
+        "main": [[{ "node": "Build Telegram brief", "type": "main", "index": 0 }]]
+      },
+      "Build Telegram brief": {
+        "main": [[{ "node": "Telegram — Send for approval", "type": "main", "index": 0 }]]
+      },
+      "Telegram — Wait for button tap": {
+        "main": [[{ "node": "Extract chosen action", "type": "main", "index": 0 }]]
+      },
+      "Extract chosen action": {
+        "main": [[{ "node": "Route by decision", "type": "main", "index": 0 }]]
+      },
+      "Route by decision": {
+        "add_crm": [[ { "node": "Notion — Add to CRM", "type": "main", "index": 0 }]],
+        "research_more": [[ { "node": "Claude — Extended research", "type": "main", "index": 0 }]],
+        "ignore": [[ { "node": "Telegram — Confirm ignored", "type": "main", "index": 0 }]]
+      },
+      "Notion — Add to CRM": {
+        "main": [[{ "node": "Telegram — Confirm CRM saved", "type": "main", "index": 0 }]]
+      },
+      "Claude — Extended research": {
+        "main": [[{ "node": "Telegram — Send deep research", "type": "main", "index": 0 }]]
+      }
+    },
+    "pinData": {},
+    "settings": { "executionOrder": "v1" },
+    "staticData": null,
+    "tags": ["ai-agent", "hitl", "deal-flow", "b2b", "claude", "telegram", "notion"],
+    "triggerCount": 0,
+    "updatedAt": "2026-03-14T00:00:00.000Z",
+    "versionId": "1"
+  }
